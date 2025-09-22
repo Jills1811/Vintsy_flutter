@@ -1,0 +1,10 @@
+{
+  "enable-web": false,
+  "enable-windows-desktop": false,
+  "enable-macos-desktop": false,
+  "enable-linux-desktop": false,
+  "enable-ios": false,
+  "enable-android": true,
+  "pub-cache": "E:\\flutter_cache",
+  "gradle-user-home": "E:\\gradle_cache"
+}
