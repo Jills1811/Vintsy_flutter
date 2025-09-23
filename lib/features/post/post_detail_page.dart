@@ -326,6 +326,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
           .collection('posts')
           .doc(postId)
           .collection('comments')
+          .where('parentCommentId', isNull: true) // Only top-level comments
           .orderBy('createdAt', descending: false)
           .snapshots(),
       builder: (context, snapshot) {
@@ -377,11 +378,14 @@ class _PostDetailPageState extends State<PostDetailPage> {
             final commenterUid = data['authorUid'] as String? ?? '';
             final text = data['text'] as String? ?? '';
             final createdAt = (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+            final commentId = comment.id;
             
             return _CommentTile(
               commenterUid: commenterUid,
               text: text,
               createdAt: createdAt,
+              commentId: commentId,
+              postId: postId,
             );
           },
         );
@@ -610,45 +614,307 @@ class _PostDetailPageState extends State<PostDetailPage> {
   }
 }
 
-class _CommentTile extends StatelessWidget {
+class _CommentTile extends StatefulWidget {
   const _CommentTile({
     required this.commenterUid,
     required this.text,
     required this.createdAt,
+    required this.commentId,
+    required this.postId,
   });
 
   final String commenterUid;
+  final String text;
+  final DateTime createdAt;
+  final String commentId;
+  final String postId;
+
+  @override
+  State<_CommentTile> createState() => _CommentTileState();
+}
+
+class _CommentTileState extends State<_CommentTile> {
+  bool _showReplies = false;
+  bool _isReplying = false;
+  final TextEditingController _replyController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Rebuild when the reply text changes so the send button enables/disables accordingly
+    _replyController.addListener(() => setState(() {}));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('users').doc(widget.commenterUid).snapshots(),
+      builder: (context, snap) {
+        final userData = snap.data?.data();
+        final displayName = userData?['fullName'] as String? ?? 'User';
+        final photoURL = userData?['photoURL'] as String?;
+        
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+          leading: CircleAvatar(
+            radius: 16,
+                backgroundImage: _photoProvider(photoURL),
+                child: _photoProvider(photoURL) == null ? const Icon(Icons.person, size: 16) : null,
+          ),
+          title: Text(displayName, style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.text),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Text(
+                        _formatTimeAgo(widget.createdAt),
+                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const SizedBox(width: 16),
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _isReplying = !_isReplying;
+                            if (!_isReplying) {
+                              _replyController.clear();
+                            }
+                          });
+                        },
+                        child: Text(
+                          'Reply',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).primaryColor,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      StreamBuilder<QuerySnapshot>(
+                        stream: FirebaseFirestore.instance
+                            .collection('posts')
+                            .doc(widget.postId)
+                            .collection('comments')
+                            .where('parentCommentId', isEqualTo: widget.commentId)
+                            .snapshots(),
+                        builder: (context, replySnap) {
+                          final replyCount = replySnap.data?.docs.length ?? 0;
+                          if (replyCount > 0) {
+                            return GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _showReplies = !_showReplies;
+                                });
+                              },
+                              child: Text(
+                                _showReplies ? 'Hide replies' : 'View $replyCount replies',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(context).primaryColor,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            );
+                          }
+                          return const SizedBox.shrink();
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+          dense: true,
+            ),
+            
+            // Reply input
+            if (_isReplying)
+              Padding(
+                padding: const EdgeInsets.only(left: 48, right: 16, bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _replyController,
+                        decoration: const InputDecoration(
+                          hintText: 'Write a reply...',
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        ),
+                        maxLines: null,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: _replyController.text.trim().isEmpty ? null : _sendReply,
+                      icon: const Icon(Icons.send),
+                    ),
+                  ],
+                ),
+              ),
+            
+            // Replies list
+            if (_showReplies)
+              _buildRepliesList(),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildRepliesList() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('posts')
+          .doc(widget.postId)
+          .collection('comments')
+          .where('parentCommentId', isEqualTo: widget.commentId)
+          .orderBy('createdAt', descending: false)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.only(left: 48, right: 16),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final replies = snapshot.data?.docs ?? [];
+        
+        return Padding(
+          padding: const EdgeInsets.only(left: 48, right: 16),
+          child: Column(
+            children: replies.map((reply) {
+              final data = reply.data() as Map<String, dynamic>;
+              final replierUid = data['authorUid'] as String? ?? '';
+              final replyText = data['text'] as String? ?? '';
+              final replyCreatedAt = (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+              
+              return _ReplyTile(
+                replierUid: replierUid,
+                text: replyText,
+                createdAt: replyCreatedAt,
+              );
+            }).toList(),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _sendReply() async {
+    if (_replyController.text.trim().isEmpty) return;
+    
+    try {
+      await PostService().addComment(
+        postId: widget.postId,
+        text: _replyController.text.trim(),
+        parentCommentId: widget.commentId,
+      );
+      
+      setState(() {
+        _isReplying = false;
+        _replyController.clear();
+        _showReplies = true; // Show replies after sending
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to send reply: $e')),
+      );
+    }
+  }
+
+  String _formatTimeAgo(DateTime dateTime) {
+    final now = DateTime.now();
+    final diff = now.difference(dateTime);
+    if (diff.inSeconds < 60) return '${diff.inSeconds}s';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
+    if (diff.inHours < 24) return '${diff.inHours}h';
+    return '${diff.inDays}d';
+  }
+
+  @override
+  void dispose() {
+    _replyController.dispose();
+    super.dispose();
+  }
+
+  ImageProvider<Object>? _photoProvider(String? value) {
+    if (value == null || value.isEmpty) return null;
+    if (value.startsWith('data:image')) {
+      try {
+        final base64Part = value.substring(value.indexOf(',') + 1);
+        return MemoryImage(base64Decode(base64Part));
+      } catch (_) {
+        return null;
+      }
+    }
+    return NetworkImage(value);
+  }
+}
+
+class _ReplyTile extends StatelessWidget {
+  const _ReplyTile({
+    required this.replierUid,
+    required this.text,
+    required this.createdAt,
+  });
+
+  final String replierUid;
   final String text;
   final DateTime createdAt;
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('users').doc(commenterUid).snapshots(),
+      stream: FirebaseFirestore.instance.collection('users').doc(replierUid).snapshots(),
       builder: (context, snap) {
         final userData = snap.data?.data();
         final displayName = userData?['fullName'] as String? ?? 'User';
         final photoURL = userData?['photoURL'] as String?;
         
-        return ListTile(
-          leading: CircleAvatar(
-            radius: 16,
-            backgroundImage: _photoProvider(photoURL),
-            child: _photoProvider(photoURL) == null ? const Icon(Icons.person, size: 16) : null,
-          ),
-          title: Text(displayName, style: const TextStyle(fontWeight: FontWeight.w600)),
-          subtitle: Column(
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(text),
-              const SizedBox(height: 4),
-              Text(
-                _formatTimeAgo(createdAt),
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              CircleAvatar(
+                radius: 12,
+                backgroundImage: _photoProvider(photoURL),
+                child: _photoProvider(photoURL) == null ? const Icon(Icons.person, size: 12) : null,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          displayName,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _formatTimeAgo(createdAt),
+                          style: const TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      text,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
-          dense: true,
         );
       },
     );
@@ -770,7 +1036,12 @@ class _CommentModalState extends State<_CommentModal> {
                           return Center(child: Text('Error: ${snapshot.error}'));
                         }
 
-                        final comments = snapshot.data?.docs ?? [];
+                        // Show only top-level comments; support legacy docs where parentCommentId is missing
+                        final all = snapshot.data?.docs ?? [];
+                        final comments = all.where((d) {
+                          final data = d.data() as Map<String, dynamic>;
+                          return data['parentCommentId'] == null || !data.containsKey('parentCommentId');
+                        }).toList();
                         
                         if (comments.isEmpty) {
                           return const Center(
@@ -807,6 +1078,8 @@ class _CommentModalState extends State<_CommentModal> {
                               commenterUid: commenterUid,
                               text: text,
                               createdAt: createdAt,
+                              commentId: comment.id,
+                              postId: widget.postId,
                             );
                           },
                         );

@@ -77,29 +77,58 @@ class PostService {
     return _firestore.collection('posts').doc(postId).snapshots();
   }
 
-  Future<void> addComment({required String postId, required String text}) async {
+  Future<void> addComment({
+    required String postId, 
+    required String text,
+    String? parentCommentId,
+  }) async {
     final commentsRef = _firestore.collection('posts').doc(postId).collection('comments').doc();
     await commentsRef.set({
       'id': commentsRef.id,
       'authorUid': _uid,
       'text': text,
+      'parentCommentId': parentCommentId, // null for top-level comments
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    // Notify post author about the new comment
-    try {
-      final postDoc = await _firestore.collection('posts').doc(postId).get();
-      final authorUid = (postDoc.data()?['authorUid'] ?? '') as String?;
-      if (authorUid != null && authorUid.isNotEmpty && authorUid != _uid) {
-        await NotificationService(firestore: _firestore).addCommentNotification(
-          toUserUid: authorUid,
-          commenterUid: _uid,
-          postId: postId,
-          commentText: text,
-        );
+    // Notify post author about the new comment (only for top-level comments)
+    if (parentCommentId == null) {
+      try {
+        final postDoc = await _firestore.collection('posts').doc(postId).get();
+        final authorUid = (postDoc.data()?['authorUid'] ?? '') as String?;
+        if (authorUid != null && authorUid.isNotEmpty && authorUid != _uid) {
+          await NotificationService(firestore: _firestore).addCommentNotification(
+            toUserUid: authorUid,
+            commenterUid: _uid,
+            postId: postId,
+            commentText: text,
+          );
+        }
+      } catch (_) {
+        // ignore notification failures
       }
-    } catch (_) {
-      // ignore notification failures
+    } else {
+      // Notify the parent comment author about the reply
+      try {
+        final parentCommentDoc = await _firestore
+            .collection('posts')
+            .doc(postId)
+            .collection('comments')
+            .doc(parentCommentId)
+            .get();
+        final parentAuthorUid = (parentCommentDoc.data()?['authorUid'] ?? '') as String?;
+        if (parentAuthorUid != null && parentAuthorUid.isNotEmpty && parentAuthorUid != _uid) {
+          await NotificationService(firestore: _firestore).addReplyNotification(
+            toUserUid: parentAuthorUid,
+            replierUid: _uid,
+            postId: postId,
+            commentId: parentCommentId,
+            replyText: text,
+          );
+        }
+      } catch (_) {
+        // ignore notification failures
+      }
     }
   }
 

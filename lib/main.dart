@@ -7,6 +7,7 @@ import 'firebase_options.dart';
 import 'app/router.dart';
 import 'providers/auth_provider.dart';
 import 'providers/theme_provider.dart';
+import 'services/push_notification_service.dart';
 import 'config/app_config.dart';
 
 void main() async {
@@ -32,6 +33,9 @@ void main() async {
     );
     
     print('Firebase initialized successfully');
+    
+    // Initialize push notifications
+    await PushNotificationService.initialize();
   } catch (e) {
     print('Firebase initialization failed: $e');
     print('Please update firebase_options.dart with your project values');

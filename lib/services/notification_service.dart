@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'push_notification_service.dart';
 
-enum NotificationType { like, comment, follow }
+enum NotificationType { like, comment, follow, reply }
 
 class NotificationService {
   NotificationService({FirebaseFirestore? firestore})
@@ -25,9 +27,22 @@ class NotificationService {
     await ref.set({
       'type': NotificationType.follow.name,
       'fromUid': followerUid,
+      'toUid': toUserUid,
       'createdAt': FieldValue.serverTimestamp(),
       'read': false,
     });
+    
+    // Send push notification
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      await PushNotificationService.sendNotificationToUser(
+        targetUserId: toUserUid,
+        title: 'New Follower',
+        body: '${currentUser.displayName ?? 'Someone'} started following you',
+        type: 'follow',
+        targetId: followerUid,
+      );
+    }
     
     print('NotificationService: Follow notification created successfully');
   }
@@ -41,11 +56,24 @@ class NotificationService {
     await _userNotifs(toUserUid).add({
       'type': NotificationType.comment.name,
       'fromUid': commenterUid,
+      'toUid': toUserUid,
       'postId': postId,
       'commentText': commentText,
       'createdAt': FieldValue.serverTimestamp(),
       'read': false,
     });
+
+    // Send push notification
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      await PushNotificationService.sendNotificationToUser(
+        targetUserId: toUserUid,
+        title: 'New Comment',
+        body: '${currentUser.displayName ?? 'Someone'} commented on your post',
+        type: 'comment',
+        targetId: postId,
+      );
+    }
   }
 
   Future<void> addLikeNotification({
@@ -63,10 +91,55 @@ class NotificationService {
       await ref.set({
         'type': NotificationType.like.name,
         'fromUid': likerUid,
+        'toUid': toUserUid,
         'postId': postId,
         'createdAt': FieldValue.serverTimestamp(),
         'read': false,
       });
+
+      // Send push notification only for new likes
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        await PushNotificationService.sendNotificationToUser(
+          targetUserId: toUserUid,
+          title: 'New Like',
+          body: '${currentUser.displayName ?? 'Someone'} liked your post',
+          type: 'like',
+          targetId: postId,
+        );
+      }
+    }
+  }
+
+  Future<void> addReplyNotification({
+    required String toUserUid,
+    required String replierUid,
+    required String postId,
+    required String commentId,
+    required String replyText,
+  }) async {
+    await _userNotifs(toUserUid).add({
+      'type': NotificationType.reply.name,
+      'fromUid': replierUid,
+      'toUid': toUserUid,
+      'postId': postId,
+      'commentId': commentId,
+      'replyText': replyText,
+      'createdAt': FieldValue.serverTimestamp(),
+      'read': false,
+    });
+
+    // Send push notification
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      await PushNotificationService.sendNotificationToUser(
+        targetUserId: toUserUid,
+        title: 'New Reply',
+        body: '${currentUser.displayName ?? 'Someone'} replied to your comment',
+        type: 'reply',
+        targetId: postId,
+        data: {'commentId': commentId},
+      );
     }
   }
 
