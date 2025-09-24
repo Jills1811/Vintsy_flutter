@@ -491,10 +491,8 @@ class FeedPage extends StatelessWidget {
                                   final isSelected = selected.contains(uid);
                                   return ListTile(
                                     leading: CircleAvatar(
-                                      backgroundImage: (photo != null && photo.isNotEmpty)
-                                          ? NetworkImage(photo)
-                                          : null,
-                                      child: (photo == null || photo.isEmpty)
+                                      backgroundImage: _photoProvider(photo),
+                                      child: _photoProvider(photo) == null
                                           ? const Icon(Icons.person)
                                           : null,
                                     ),
@@ -562,7 +560,6 @@ class FeedPage extends StatelessWidget {
     final currentUid = FirebaseAuth.instance.currentUser?.uid;
     if (currentUid == null) return;
 
-    final batch = FirebaseFirestore.instance.batch();
     for (final peerUid in toUids) {
       final roomId = _getRoomId(currentUid, peerUid);
       final msgRef = FirebaseFirestore.instance
@@ -570,25 +567,28 @@ class FeedPage extends StatelessWidget {
           .doc(roomId)
           .collection('messages')
           .doc();
-      batch.set(msgRef, {
+      // Independent message write to avoid batch failure masking the cause
+      await msgRef.set({
         'id': msgRef.id,
         'from': currentUid,
         'to': peerUid,
         'type': 'post',
+        'text': '',
         'postId': postId,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // Optional: upsert chat metadata
-      final chatRef = FirebaseFirestore.instance.collection('chats').doc(roomId);
-      batch.set(chatRef, {
-        'users': [currentUid, peerUid],
-        'updatedAt': FieldValue.serverTimestamp(),
-        'lastMessageType': 'post',
-        'lastMessagePostId': postId,
-      }, SetOptions(merge: true));
+      // Best-effort chat metadata update
+      try {
+        final chatRef = FirebaseFirestore.instance.collection('chats').doc(roomId);
+        await chatRef.set({
+          'users': [currentUid, peerUid],
+          'updatedAt': FieldValue.serverTimestamp(),
+          'lastMessageType': 'post',
+          'lastMessagePostId': postId,
+        }, SetOptions(merge: true));
+      } catch (_) {}
     }
-    await batch.commit();
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
